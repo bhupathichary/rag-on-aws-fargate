@@ -1,0 +1,13 @@
+# Keep the build context small and secrets out of the image.
+# (Everything here is excluded from what gets sent to the Docker daemon.)
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+.pytest_cache/
+.cache/
+# never ship secrets or keys
+.env
+*.pem

@@ -1,0 +1,22 @@
+# --- Secrets: NEVER commit these ---
+# task-def.json holds your API key at deploy time; commit task-def.example.json instead
+task-def.json
+*.env
+.env
+*.pem
+secrets.*
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# --- Model / build caches & logs ---
+.cache/
+*.log
+.docker-build.log
+
+# --- Personal project notes (not for the public repo) ---
+RESUME_HERE.md
+CLEANUP.md
