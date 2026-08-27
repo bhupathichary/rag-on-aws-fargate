@@ -13,4 +13,4 @@ capability (not a tutorial), measured and documented.
 | 5 | **Hardening** — Secrets Manager, ALB + HTTPS, private subnets, autoscaling, caching, guardrails, API auth | Production-grade security & reliability |
 | 6 | **Agentic patterns** *(stretch)* — tool use, multi-step, streaming | Advanced AI system design |
 
-**Status:** ✅ Base deploy · ✅ Milestone 1 — Evaluation (validated via a retrieval-sensitivity test) · 🚧 Milestone 2 — Retrieval quality
+**Status:** ✅ Base deploy · ✅ M1 Evaluation · ✅ M2 Retrieval quality — chunking + doc/chunk-level recall · 🚧 M3 Observability

@@ -25,21 +25,50 @@ from sentence_transformers import SentenceTransformer
 # Claude may return. Force UTF-8 so answers print cleanly.
 sys.stdout.reconfigure(encoding="utf-8")
 
-# --- 1. Load the knowledge base -------------------------------------------------
+# --- 1. Load the knowledge base and split into CHUNKS ---------------------------
+# Instead of embedding each whole file as one coarse vector, we split every doc into
+# section-level chunks (one per "## " heading, plus the intro). Each chunk is prefixed
+# with its doc title so it stays self-contained and embeds with topic context.
 KB_DIR = Path(__file__).parent / "kb"
 doc_paths = [p for p in KB_DIR.glob("*.md") if p.name != "README.md"]
-docs = [p.read_text(encoding="utf-8") for p in doc_paths]
-print(f"Loaded {len(docs)} KB documents from {KB_DIR}")
+
+
+def split_markdown(text: str):
+    """Split a markdown doc into (heading, section_text) pairs — the intro plus one
+    chunk per '## ' section. heading is 'intro' for content before the first '## '."""
+    sections, heading, current = [], "intro", []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if current:
+                sections.append((heading, "\n".join(current).strip()))
+            heading = line[3:].strip()
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        sections.append((heading, "\n".join(current).strip()))
+    return [(h, t) for h, t in sections if t]
+
+
+# Parallel lists: chunk text (embedded + fed to the LLM), source file, and a stable
+# chunk id "file::heading" used to evaluate retrieval at the section level.
+chunk_texts, chunk_sources, chunk_ids = [], [], []
+for path in doc_paths:
+    text = path.read_text(encoding="utf-8")
+    title = next((ln[2:].strip() for ln in text.splitlines() if ln.startswith("# ")), path.stem)
+    for heading, section in split_markdown(text):
+        chunk_texts.append(f"[{title}]\n{section}")   # title prefix = topic context per chunk
+        chunk_sources.append(path.name)
+        chunk_ids.append(f"{path.name}::{heading}")
+print(f"Loaded {len(doc_paths)} docs -> {len(chunk_texts)} chunks from {KB_DIR}")
 
 # --- 2. Embed locally + 3. Build the FAISS index --------------------------------
-print("Embedding docs (first run downloads the model, ~90 MB)...")
+# Vectors are L2-normalized, so inner product == cosine similarity (~0-1, higher = closer).
+print("Embedding chunks (first run downloads the model, ~90 MB)...")
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
-doc_vecs = embedder.encode(docs, convert_to_numpy=True, normalize_embeddings=True)
-# Vectors are L2-normalized (unit length), so inner product == cosine similarity:
-# a score in ~[0, 1] where higher = more similar. This is more interpretable than
-# raw L2 distance and is the standard metric for embedding search.
-index = faiss.IndexFlatIP(doc_vecs.shape[1])
-index.add(doc_vecs)
+chunk_vecs = embedder.encode(chunk_texts, convert_to_numpy=True, normalize_embeddings=True)
+index = faiss.IndexFlatIP(chunk_vecs.shape[1])
+index.add(chunk_vecs)
 
 client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
 
@@ -54,19 +83,26 @@ MIN_SCORE = 0.25
 TOP_K = int(os.environ.get("RAG_TOP_K", "3"))
 
 
-def answer(question: str, k: int = TOP_K) -> str:
+def retrieve(question: str, k: int = TOP_K):
+    """Retrieve the top-k chunks above the relevance floor.
+    Returns a list of (chunk_index, source_filename, score) — retrieval only, no LLM.
+    Kept separate from answer() so it can be evaluated on its own (retrieval recall)."""
     q_vec = embedder.encode([question], convert_to_numpy=True, normalize_embeddings=True)
     scores, idx = index.search(q_vec, k)
+    return [(int(i), chunk_sources[i], float(s))
+            for i, s in zip(idx[0], scores[0]) if s >= MIN_SCORE]
 
-    # Pair each hit with its score, keep only those above the relevance floor.
-    hits = [(doc_paths[i].name, i, s) for i, s in zip(idx[0], scores[0]) if s >= MIN_SCORE]
+
+def answer(question: str, k: int = TOP_K, show: bool = True) -> str:
+    hits = retrieve(question, k)
     if not hits:
         return "No KB document is relevant enough to answer this confidently."
 
-    print("  retrieved:")
-    for name, _, s in hits:
-        print(f"    {s:.3f}  {name}")
-    context = "\n\n---\n\n".join(docs[i] for _, i, _ in hits)
+    if show:  # interactive CLI prints what was retrieved; the eval suppresses it for clean output
+        print("  retrieved:")
+        for _, src, s in hits:
+            print(f"    {s:.3f}  {src}")
+    context = "\n\n---\n\n".join(chunk_texts[i] for i, _, _ in hits)
 
     resp = client.messages.create(
         model="claude-sonnet-4-6",

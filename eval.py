@@ -17,7 +17,7 @@ from pathlib import Path
 import anthropic
 from pydantic import BaseModel, Field
 
-from rag import answer  # reuse the exact pipeline the deployed service uses
+from rag import answer, retrieve, chunk_ids  # reuse the exact pipeline the deployed service uses
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -66,27 +66,63 @@ def judge(question: str, reference: str, ans: str) -> Verdict:
     return resp.parsed_output
 
 
+def source_recall(expected, retrieved_sources):
+    """Fraction of expected source DOCS retrieved (coarse). None = out-of-scope."""
+    if not expected:
+        return None
+    return len(set(expected) & set(retrieved_sources)) / len(set(expected))
+
+
+def chunk_recall(expected_chunks, retrieved_ids):
+    """Fraction of expected CHUNKS (section-level) retrieved. None = out-of-scope.
+    An expected label like 'rds-aurora.md::Amazon Aurora' matches a retrieved chunk id
+    by prefix, so labels stay stable even if the real heading has a trailing '(...)'."""
+    if not expected_chunks:
+        return None
+    hit = sum(1 for e in expected_chunks if any(cid.startswith(e) for cid in retrieved_ids))
+    return hit / len(expected_chunks)
+
+
 def main():
     eval_set = json.loads(
         (Path(__file__).parent / "evals" / "eval_set.json").read_text(encoding="utf-8"))
 
-    results = []
+    results, doc_recalls, chunk_recalls = [], [], []
     for case in eval_set:
-        ans = answer(case["question"])
+        # Measure retrieval on its own, at BOTH doc level and chunk level.
+        hits = retrieve(case["question"])
+        retrieved_sources = [src for _, src, _ in hits]
+        retrieved_ids = [chunk_ids[i] for i, _, _ in hits]
+        dr = source_recall(case.get("expected_sources", []), retrieved_sources)
+        cr = chunk_recall(case.get("expected_chunks", []), retrieved_ids)
+        if dr is not None:
+            doc_recalls.append(dr)
+        if cr is not None:
+            chunk_recalls.append(cr)
+
+        # Then the full answer + judge (end-to-end quality). show=False keeps the eval output clean.
+        ans = answer(case["question"], show=False)
         v = judge(case["question"], case["reference"], ans)
         passed = v.score >= PASS_SCORE and v.grounded
         results.append((case["id"], v, passed))
+
         mark = "PASS" if passed else "FAIL"
-        print(f"\n[{mark}] {case['id']}  (score={v.score}, grounded={v.grounded})")
+        d = "n/a" if dr is None else f"{dr:.2f}"
+        c = "n/a" if cr is None else f"{cr:.2f}"
+        print(f"\n[{mark}] {case['id']}  (score={v.score}, doc_recall={d}, chunk_recall={c})")
         print(f"       judge: {v.reasoning}")
 
     n = len(results)
     passes = sum(1 for _, _, p in results if p)
     avg = sum(v.score for _, v, _ in results) / n
-    print("\n" + "=" * 55)
-    print(f"PASS RATE : {passes}/{n}  ({round(100 * passes / n)}%)")
-    print(f"AVG SCORE : {avg:.2f} / 5")
-    print("=" * 55)
+    avg_dr = sum(doc_recalls) / len(doc_recalls) if doc_recalls else 0.0
+    avg_cr = sum(chunk_recalls) / len(chunk_recalls) if chunk_recalls else 0.0
+    print("\n" + "=" * 60)
+    print(f"PASS RATE          : {passes}/{n}  ({round(100 * passes / n)}%)")
+    print(f"AVG SCORE          : {avg:.2f} / 5")
+    print(f"DOC-LEVEL RECALL   : {avg_dr:.2f}   (right file retrieved)")
+    print(f"CHUNK-LEVEL RECALL : {avg_cr:.2f}   (right section retrieved)")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

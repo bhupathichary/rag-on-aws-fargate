@@ -143,6 +143,12 @@ they need, and the eval score drops **100% → 92%**, correctly failing the mult
 proves the eval catches real regressions instead of always passing. (Notably, the failing answer
 stays *grounded* — it declines rather than hallucinates — i.e. the system degrades gracefully.)
 
+**Retrieval is measured at two levels.** The harness reports **doc-level recall** (right *file*
+retrieved?) and **chunk-level recall** (right *section*?). The gap is the signal: at `RAG_TOP_K=1`,
+doc-level recall stays ~0.91 while chunk-level recall drops to ~0.64 — exposing a *"right file,
+wrong section"* failure that the doc-level number is blind to. Chunk-level recall tracks answer
+quality far more closely, and shows why chunked retrieval needs **top-k ≥ 3**.
+
 ```bash
 python eval.py               # top-3 retrieval (default): passes
 $env:RAG_TOP_K=1; python eval.py   # starved retrieval: multi-hop fails -> proves the eval has teeth
