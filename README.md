@@ -137,8 +137,15 @@ flowchart TD
 - A case **passes** if the judge scores it ≥ 4/5 **and** marks it grounded (not hallucinated).
 - The set includes **multi-hop** questions (answer spans several docs) and **out-of-scope** questions (to verify the system *declines* instead of hallucinating).
 
+**Sensitivity check — does the eval actually detect problems?** Retrieval depth is configurable
+via the `RAG_TOP_K` env var. Setting `RAG_TOP_K=1` starves the multi-hop questions of the docs
+they need, and the eval score drops **100% → 92%**, correctly failing the multi-hop case. That
+proves the eval catches real regressions instead of always passing. (Notably, the failing answer
+stays *grounded* — it declines rather than hallucinates — i.e. the system degrades gracefully.)
+
 ```bash
-python eval.py   # -> per-question PASS/FAIL + a summary: pass rate and average score
+python eval.py               # top-3 retrieval (default): passes
+$env:RAG_TOP_K=1; python eval.py   # starved retrieval: multi-hop fails -> proves the eval has teeth
 ```
 
 ## Possible next improvements

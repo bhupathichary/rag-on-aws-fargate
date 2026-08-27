@@ -12,6 +12,7 @@ Run:  python rag.py
 Then type questions at the prompt (e.g. "difference between multi-az and read replicas?").
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -48,8 +49,12 @@ client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
 # (an off-topic question) get dropped so we don't feed Claude irrelevant context.
 MIN_SCORE = 0.25
 
+# How many docs to retrieve per query. Configurable via env var so we can test retrieval
+# sensitivity (e.g. RAG_TOP_K=1 starves multi-hop questions) without changing code. Default 3.
+TOP_K = int(os.environ.get("RAG_TOP_K", "3"))
 
-def answer(question: str, k: int = 3) -> str:
+
+def answer(question: str, k: int = TOP_K) -> str:
     q_vec = embedder.encode([question], convert_to_numpy=True, normalize_embeddings=True)
     scores, idx = index.search(q_vec, k)
 
