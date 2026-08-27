@@ -105,9 +105,45 @@ aws ecs run-task --cluster triage-cluster --launch-type FARGATE --task-definitio
 - **HTTP for the demo.** Served over plain HTTP on a bare IP. Production would terminate **TLS** at an
   ALB/CloudFront with an ACM certificate on a real domain (HTTPS to the world, HTTP to the container).
 
+## Evaluation
+
+Quality is **measured, not assumed.** `eval.py` runs a fixed test set (`evals/eval_set.json`)
+through the RAG pipeline and uses an **LLM-as-judge** to score each answer on correctness and
+groundedness — so improvements (and regressions) are visible as a number.
+
+```mermaid
+flowchart TD
+    START([python eval.py]) --> STARTUP["Startup, once:<br/>load kb/*.md, embed, build FAISS index<br/>local and free"]
+    STARTUP --> LOAD["Load eval_set.json:<br/>questions + reference answers"]
+    LOAD --> LOOP
+
+    subgraph LOOP["Repeat for each question"]
+        direction TB
+        Q["question"] --> A1["1. embed question<br/>MiniLM, local"]
+        A1 --> A2["2. FAISS search, top-3 docs<br/>local, relevance floor"]
+        A2 --> A3["3. build context from retrieved docs"]
+        A3 --> A4["4. Claude Sonnet: context + question<br/>API call, returns RAG answer"]
+        A4 --> JUDGE["Judge: Claude Sonnet, temp 0<br/>question + reference + RAG answer<br/>API call, returns verdict"]
+        JUDGE --> P{"score >= 4<br/>AND grounded?"}
+        P -->|yes| PASS["PASS"]
+        P -->|no| FAIL["FAIL"]
+    end
+
+    LOOP --> SUM["Summary:<br/>pass rate + average score"]
+```
+
+- **Two model calls per question:** one to *generate* the answer (the product), one to *judge* it (the test) — that separation is the LLM-as-judge pattern.
+- **Local/free steps:** embedding + FAISS search. Only the two Claude calls cost anything.
+- A case **passes** if the judge scores it ≥ 4/5 **and** marks it grounded (not hallucinated).
+- The set includes **multi-hop** questions (answer spans several docs) and **out-of-scope** questions (to verify the system *declines* instead of hallucinating).
+
+```bash
+python eval.py   # -> per-question PASS/FAIL + a summary: pass rate and average score
+```
+
 ## Possible next improvements
 - API key → **AWS Secrets Manager**; **ALB + HTTPS**; **Terraform/CDK** for infrastructure-as-code.
-- **Evals** (LLM-as-judge over a labelled question set) to measure answer quality.
+- Expand the eval set (more multi-hop / adversarial cases) and **gate CI/CD on the eval score**. *(Base eval harness — `eval.py` — implemented.)*
 - Swap FAISS for a managed vector DB (**pgvector on RDS** / **OpenSearch**); add reranking.
 - **CI/CD** (GitHub Actions) to build + push on every commit.
 
@@ -116,8 +152,11 @@ aws ecs run-task --cluster triage-cluster --launch-type FARGATE --task-definitio
 app.py                 FastAPI service (/ask, /health)
 rag.py                 RAG pipeline (embed → FAISS search → grounded Claude call)
 triage.py              structured-output ticket classifier
+eval.py                evaluation harness (LLM-as-judge)
+evals/eval_set.json    labelled test set (questions + reference answers)
 kb/                    knowledge-base docs (markdown)
 Dockerfile             CPU-only container build
 task-def.example.json  Fargate task definition template (copy → task-def.json)
 requirements.txt
+ROADMAP.md             demo → production milestones
 ```
